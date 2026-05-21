@@ -1,13 +1,10 @@
 import discord
 from discord.ext import commands
 import yt_dlp
+import asyncio
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# 🔥 حط آيديات الرومات
-VOICE_CHANNEL_ID = 1505282531858317382
-COMMAND_CHANNEL_ID = 1505282531858317382
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
@@ -20,42 +17,58 @@ YDL_OPTIONS = {
     'quiet': True
 }
 
+queues = {}
+
+
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user}")
 
-    # 🎥 حالة Streaming
-    await bot.change_presence(
-        activity=discord.Streaming(
-            name="Silent Error",
-            url="https://twitch.tv/discord"
-        )
-    )
 
-    # 🔊 دخول الروم الصوتي تلقائي
-    channel = bot.get_channel(VOICE_CHANNEL_ID)
-    if channel and isinstance(channel, discord.VoiceChannel):
-        try:
-            if not channel.guild.voice_client:
-                await channel.connect(self_deaf=True)
-            print("Connected to voice channel")
-        except Exception as e:
-            print(f"Voice join error: {e}")
+async def play_next(ctx):
+    guild_id = ctx.guild.id
+
+    if guild_id not in queues or len(queues[guild_id]) == 0:
+        return
+
+    vc = ctx.voice_client
+    if not vc:
+        return
+
+    url, title = queues[guild_id].pop(0)
+
+    source = discord.FFmpegOpusAudio.from_probe(url, **FFMPEG_OPTIONS)
+
+    def after(error):
+        asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop)
+
+    vc.play(source, after=after)
+
+    await ctx.send(f"Now playing: {title}")
 
 
 @bot.command()
 async def play(ctx, *, search):
-    # 🚫 يشتغل فقط في روم معين
-    if ctx.channel.id != COMMAND_CHANNEL_ID:
+
+    # لازم المستخدم يكون في فويس
+    if not ctx.author.voice or not ctx.author.voice.channel:
+        await ctx.send("You must be in a voice channel")
         return
+
+    guild_id = ctx.guild.id
 
     vc = ctx.voice_client
 
-    # يدخل الروم إذا مو موجود
+    # يدخل نفس روم المستخدم أو يتحرك له
     if not vc:
         vc = await ctx.author.voice.channel.connect(self_deaf=True)
+    else:
+        if vc.channel != ctx.author.voice.channel:
+            await vc.move_to(ctx.author.voice.channel)
 
-    # 🔍 جلب الصوت من يوتيوب
+    if guild_id not in queues:
+        queues[guild_id] = []
+
     with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
         info = ydl.extract_info(search, download=False)
 
@@ -65,19 +78,31 @@ async def play(ctx, *, search):
         url = info['url']
         title = info.get('title', 'Unknown')
 
-    # ⛔ إيقاف أي صوت شغال
-    if vc.is_playing():
-        vc.stop()
+    queues[guild_id].append((url, title))
 
-    # 🎧 تشغيل Streaming
-    source = await discord.FFmpegOpusAudio.from_probe(
-        url,
-        **FFMPEG_OPTIONS
-    )
+    await ctx.send(f"Added to queue: {title}")
 
-    vc.play(source)
-
-    await ctx.send(f"🎵 Now Streaming: **{title}**")
+    if not vc.is_playing():
+        await play_next(ctx)
 
 
-bot.run("")
+@bot.command()
+async def skip(ctx):
+    if ctx.voice_client and ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+        await ctx.send("Skipped")
+
+
+@bot.command()
+async def queue(ctx):
+    guild_id = ctx.guild.id
+
+    if guild_id not in queues or len(queues[guild_id]) == 0:
+        await ctx.send("Queue is empty")
+        return
+
+    songs = "\n".join([t for _, t in queues[guild_id]])
+    await ctx.send(f"Queue:\n{songs}")
+
+
+bot.run("YOUR_TOKEN")
