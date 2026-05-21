@@ -2,7 +2,8 @@ import discord
 from discord.ext import commands
 import yt_dlp
 import asyncio
-import os  # ← أضف هذا فوق
+import os
+from aiohttp import web
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -16,6 +17,7 @@ YDL_OPTIONS = {
     'noplaylist': True,
     'quiet': True
 }
+
 queues = {}
 
 @bot.event
@@ -38,11 +40,13 @@ async def play_next(ctx):
 
 @bot.command()
 async def play(ctx, *, search):
+    # لازم المستخدم يكون في فويس
     if not ctx.author.voice or not ctx.author.voice.channel:
         await ctx.send("You must be in a voice channel")
         return
     guild_id = ctx.guild.id
     vc = ctx.voice_client
+    # يدخل نفس روم المستخدم أو يتحرك له
     if not vc:
         vc = await ctx.author.voice.channel.connect(self_deaf=True)
     else:
@@ -76,6 +80,17 @@ async def queue(ctx):
     songs = "\n".join([t for _, t in queues[guild_id]])
     await ctx.send(f"Queue:\n{songs}")
 
-# ← هذا السطر المهم في الأخير
-bot.run(os.environ.get("DISCORD_TOKEN"))
-bot.run("YOUR_TOKEN")
+# ← هذا الجديد فقط
+async def health(request):
+    return web.Response(text="OK")
+
+async def main():
+    app = web.Application()
+    app.router.add_get('/', health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 8080)))
+    await site.start()
+    await bot.start(os.environ.get("DISCORD_TOKEN"))
+
+asyncio.run(main())
